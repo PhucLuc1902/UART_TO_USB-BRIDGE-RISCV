@@ -1,0 +1,126 @@
+`timescale 1ns/1ps
+
+// Testbench cho top_btn_reset_clean (PicoRV32 + BRAM + UART)
+// - Nạp firmware.mem vào BRAM
+// - Bắt UART TX 115200, 8N1
+// - In ra 2 dòng banner đúng với firmware.c
+
+module testb_top;
+
+    // ---------------- Tham số giống DUT ----------------
+    localparam integer CLK_HZ    = 125_000_000;
+    localparam integer BAUD      = 115200;
+    localparam integer TX_DIV    = (CLK_HZ + BAUD/2) / BAUD;
+    // 2 dòng banner = 76 ký tự, lấy dư ra 80 cho chắc
+    localparam integer NUM_CHARS = 80;
+
+    // ---------------- Tín hiệu nối với DUT ----------------
+    reg  clk;
+    reg  rst_btn;
+    reg  uart_rx;
+    wire uart_tx;
+
+    // ---------------- DUT ----------------
+    top #(
+        .CLK_HZ(CLK_HZ),
+        .BAUD  (BAUD)
+    ) dut (
+        .clk     (clk),
+        .rst_btn (rst_btn),
+        .uart_rx (uart_rx),
+        .uart_tx (uart_tx)
+    );
+
+    // ---------------- Nạp firmware vào BRAM ----------------
+    // Lưu ý: dùng đúng tên file mà project đang có: firmware.mem
+    initial begin
+        $display("Loading firmware.mem into dut.bram.mem ...");
+        $readmemh("firmware.mem", dut.bram.mem);
+    end
+
+    // ---------------- Clock 125 MHz ----------------
+    initial clk = 1'b0;
+    always #4 clk = ~clk;   // 8 ns period
+
+    // ---------------- Biến log UART (INIT để hết đỏ) ----------------
+    integer i;
+    reg [7:0] ch = 8'h00;                     // không còn X
+    reg [7:0] buffer [0:NUM_CHARS-1];         // mảng log UART
+
+    // init toàn bộ buffer về 0 để không có X
+    initial begin
+        for (i = 0; i < NUM_CHARS; i = i + 1)
+            buffer[i] = 8'h00;
+    end
+
+    // ---------------- Task bắt 1 byte UART 8N1 ----------------
+    task automatic uart_capture_byte(output reg [7:0] data);
+        integer j;
+        begin
+            // Chờ start bit (uart_tx kéo xuống 0)
+            @(negedge uart_tx);
+
+            // Tới giữa bit đầu tiên
+            repeat (TX_DIV/2) @(posedge clk);
+
+            // Đọc 8 data bits, LSB trước
+            for (j = 0; j < 8; j = j + 1) begin
+                repeat (TX_DIV) @(posedge clk);
+                data[j] = uart_tx;
+            end
+
+            // Chờ stop bit
+            repeat (TX_DIV) @(posedge clk);
+        end
+    endtask
+
+    // ---------------- Main initial block ----------------
+    integer k;
+
+    initial begin
+        $timeformat(-9, 3, " ns", 10);
+
+        // Reset ngoài
+        rst_btn = 1'b1;   // BTN nhấn = 1
+        uart_rx = 1'b1;   // RX idle = 1
+
+        // Giữ reset 1 lúc (50 chu kỳ clock)
+        repeat (50) @(posedge clk);
+        rst_btn = 1'b0;
+        $display("%t : Reset released", $time);
+
+        // KHÔNG cần chờ thêm - task uart_capture_byte sẽ tự đợi tới lúc UART gửi byte đầu tiên
+
+        $display("---- Capturing UART stream (banner) ----");
+
+        // Bắt 80 byte đầu từ UART
+        for (k = 0; k < NUM_CHARS; k = k + 1) begin
+            uart_capture_byte(ch);
+            buffer[k] = ch;
+
+            if (ch >= 8'd32 && ch < 8'd127)
+                $display("%t : UART[%0d] = 0x%02x (%c)", $time, k, ch, ch);
+            else
+                $display("%t : UART[%0d] = 0x%02x (.)", $time, k, ch);
+        end
+
+        // In lại thành text, xử lý \r\n
+        $write("\n===== UART text from firmware.c =====\n    ");
+        for (k = 0; k < NUM_CHARS; k = k + 1) begin
+            ch = buffer[k];
+            if (ch >= 8'd32 && ch < 8'd127)
+                $write("%c", ch);
+            else if (ch == 8'd10)      // '\n'
+                $write("\n    ");
+            else if (ch == 8'd13)      // '\r'
+                ;                      // bỏ qua
+            else
+                $write(".");
+        end
+        $write("\n======================================\n");
+
+        #1_000_000; // thêm 1 ms cho chắc
+        $finish;
+    end
+
+endmodule
