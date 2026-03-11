@@ -42,11 +42,3 @@ The firmware (`firmware1.c`) runs on the embedded processor and handles UART com
 ## Simulation
 
 Simulation files are located in `Do_an_1.sim/sim_1/behav/xsim/`. Use Vivado's simulation tools to run behavioral simulations.
-
-## Contributing
-
-Please ensure all changes are tested and documented. Use Git for version control.
-
-## License
-
-[Specify license here, e.g., MIT, GPL, etc.]
